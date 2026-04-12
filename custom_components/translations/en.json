@@ -3,19 +3,19 @@
     "step": {
       "user": {
         "title": "Connect to Music Assistant",
-        "description": "Enter your Music Assistant server URL and API token. You can create a token in the Music Assistant web UI under your profile settings.",
+        "description": "Music Assistant server found at {server_url}. Enter your API token to connect. You can create a token in the Music Assistant web UI under your profile settings.",
         "data": {
-          "server_url": "Server URL",
           "token": "API Token"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to Music Assistant. Check the server URL and token.",
+      "cannot_connect": "Failed to connect. Check that your API token is correct.",
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Bell Media Cards is already configured"
+      "already_configured": "Bell Media Cards is already configured",
+      "mass_not_found": "Music Assistant integration not found. Please set up Music Assistant first."
     }
   }
 }
