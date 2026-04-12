@@ -1,0 +1,90 @@
+get_queue_items:
+  name: Get Queue Items
+  description: Get the full list of items in a player queue.
+  fields:
+    queue_id:
+      name: Queue ID
+      description: The queue ID (usually the same as the player ID).
+      required: true
+      selector:
+        text:
+    limit:
+      name: Limit
+      description: Maximum number of items to return.
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 500
+    offset:
+      name: Offset
+      description: Starting position in the queue.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 10000
+
+get_players:
+  name: Get Players
+  description: Get all available Music Assistant players.
+
+get_queue:
+  name: Get Queue
+  description: Get queue metadata including current and next item.
+  fields:
+    queue_id:
+      name: Queue ID
+      description: The queue ID (usually the same as the player ID).
+      required: true
+      selector:
+        text:
+
+get_favorites:
+  name: Get Favorites
+  description: Get favorite items from the Music Assistant library.
+  fields:
+    media_type:
+      name: Media Type
+      description: Type of media to retrieve (track, album, artist, playlist).
+      default: track
+      selector:
+        select:
+          options:
+            - track
+            - album
+            - artist
+            - playlist
+    limit:
+      name: Limit
+      description: Maximum number of items to return.
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 500
+    offset:
+      name: Offset
+      description: Starting position in the list.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 10000
+
+send_command:
+  name: Send Command
+  description: Send a raw command to the Music Assistant API.
+  fields:
+    command:
+      name: Command
+      description: The MA API command (e.g. player_queues/items).
+      required: true
+      selector:
+        text:
+    args:
+      name: Arguments
+      description: Command arguments as a dictionary.
+      default: {}
+      selector:
+        object:
