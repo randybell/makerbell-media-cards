@@ -5,18 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import CONF_SERVER_URL, CONF_TOKEN, DOMAIN
+from .const import DOMAIN, MASS_DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
-type BellMediaConfigEntry = ConfigEntry
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -25,34 +21,62 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: BellMediaConfigEntry) -> bool:
+def _get_mass_client(hass: HomeAssistant, entry: ConfigEntry):
+    """Get the MusicAssistantClient from the core MA integration."""
+    mass_entry_id = entry.data.get("mass_entry_id")
+
+    for ma_entry in hass.config_entries.async_entries(MASS_DOMAIN):
+        if mass_entry_id and ma_entry.entry_id != mass_entry_id:
+            continue
+        if ma_entry.state.value != "loaded":
+            continue
+
+        runtime_data = ma_entry.runtime_data
+        if runtime_data is None:
+            continue
+
+        # The client may be stored directly or as an attribute
+        if hasattr(runtime_data, "mass"):
+            return runtime_data.mass
+        if hasattr(runtime_data, "client"):
+            return runtime_data.client
+        if hasattr(runtime_data, "send_command"):
+            return runtime_data
+
+        # Log what we found so we can debug
+        _LOGGER.debug(
+            "MA runtime_data type: %s, attrs: %s",
+            type(runtime_data).__name__,
+            [a for a in dir(runtime_data) if not a.startswith("_")],
+        )
+        return runtime_data
+
+    return None
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Bell Media Cards from a config entry."""
-    from music_assistant_client import MusicAssistantClient
+    mass = _get_mass_client(hass, entry)
 
-    server_url = entry.data[CONF_SERVER_URL]
-    token = entry.data[CONF_TOKEN]
-    session = async_get_clientsession(hass)
-
-    client = MusicAssistantClient(server_url, session, token=token)
-
-    try:
-        await client.start_listening()
-    except Exception as err:
-        _LOGGER.error("Failed to connect to Music Assistant: %s", err)
+    if mass is None:
+        _LOGGER.error("Music Assistant client not available")
         return False
 
-    hass.data[DOMAIN][entry.entry_id] = client
+    hass.data[DOMAIN][entry.entry_id] = mass
 
-    _register_services(hass, entry)
+    _LOGGER.info(
+        "Bell Media Cards connected to Music Assistant (client type: %s)",
+        type(mass).__name__,
+    )
+
+    _register_services(hass)
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: BellMediaConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    client = hass.data[DOMAIN].pop(entry.entry_id, None)
-    if client:
-        await client.disconnect()
+    hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
 
 
@@ -63,7 +87,7 @@ def _get_client(hass: HomeAssistant) -> Any:
     raise ValueError("No Music Assistant connection available")
 
 
-def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
+def _register_services(hass: HomeAssistant) -> None:
     """Register Bell Media services."""
 
     if hass.services.has_service(DOMAIN, "get_queue_items"):
@@ -83,53 +107,13 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             offset=offset,
         )
 
-        return {
-            "items": [
-                {
-                    "queue_item_id": item.queue_item_id,
-                    "name": item.name,
-                    "duration": item.duration,
-                    "media_item": {
-                        "uri": item.media_item.uri if item.media_item else None,
-                        "name": item.media_item.name if item.media_item else None,
-                        "media_type": item.media_item.media_type.value if item.media_item else None,
-                        "image": _get_image_url(item.media_item) if item.media_item else None,
-                        "artists": [
-                            {"name": a.name, "uri": a.uri}
-                            for a in (item.media_item.artists or [])
-                        ] if item.media_item and hasattr(item.media_item, "artists") else [],
-                        "album": {
-                            "name": item.media_item.album.name,
-                            "uri": item.media_item.album.uri,
-                            "image": _get_image_url(item.media_item.album),
-                        } if item.media_item and hasattr(item.media_item, "album") and item.media_item.album else None,
-                    },
-                }
-                for item in items
-            ]
-        }
+        return {"items": _safe_serialize(items)}
 
     async def handle_get_players(call: ServiceCall) -> dict:
         """Get all available players."""
         client = _get_client(hass)
         players = await client.send_command("players/all")
-
-        return {
-            "players": [
-                {
-                    "player_id": p.player_id,
-                    "name": p.display_name,
-                    "available": p.available,
-                    "state": p.state.value if p.state else "unknown",
-                    "volume_level": p.volume_level,
-                    "volume_muted": p.volume_muted,
-                    "group_childs": p.group_childs or [],
-                    "synced_to": p.synced_to,
-                    "type": p.type.value if p.type else "unknown",
-                }
-                for p in players
-            ]
-        }
+        return {"players": _safe_serialize(players)}
 
     async def handle_get_queue(call: ServiceCall) -> dict:
         """Get queue metadata."""
@@ -139,19 +123,7 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             "player_queues/get_queue",
             queue_id=queue_id,
         )
-
-        return {
-            "queue_id": queue.queue_id,
-            "active": queue.active,
-            "name": queue.display_name,
-            "items": queue.items,
-            "shuffle_enabled": queue.shuffle_enabled,
-            "repeat_mode": queue.repeat_mode.value if queue.repeat_mode else "off",
-            "current_index": queue.current_index,
-            "elapsed_time": queue.elapsed_time,
-            "current_item": _serialize_queue_item(queue.current_item) if queue.current_item else None,
-            "next_item": _serialize_queue_item(queue.next_item) if queue.next_item else None,
-        }
+        return {"queue": _safe_serialize(queue)}
 
     async def handle_get_favorites(call: ServiceCall) -> dict:
         """Get favorites from library."""
@@ -167,35 +139,15 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             offset=offset,
         )
 
-        return {
-            "items": [
-                {
-                    "name": item.name,
-                    "uri": item.uri,
-                    "media_type": item.media_type.value if item.media_type else media_type,
-                    "image": _get_image_url(item),
-                    "artists": [
-                        {"name": a.name, "uri": a.uri}
-                        for a in (item.artists or [])
-                    ] if hasattr(item, "artists") and item.artists else [],
-                }
-                for item in items
-            ]
-        }
+        return {"items": _safe_serialize(items)}
 
     async def handle_send_command(call: ServiceCall) -> dict:
         """Send a raw command to Music Assistant."""
         client = _get_client(hass)
         command = call.data["command"]
         args = call.data.get("args", {})
-
         result = await client.send_command(command, **args)
-
-        if isinstance(result, list):
-            return {"result": [_safe_serialize(item) for item in result]}
-        elif result is not None:
-            return {"result": _safe_serialize(result)}
-        return {"result": None}
+        return {"result": _safe_serialize(result)}
 
     hass.services.async_register(
         DOMAIN,
@@ -251,48 +203,16 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
 
 
-def _get_image_url(item: Any) -> str | None:
-    """Extract image URL from a media item."""
-    if not item:
-        return None
-    if hasattr(item, "image") and item.image:
-        if isinstance(item.image, str):
-            return item.image
-        if hasattr(item.image, "url"):
-            return item.image.url
-    if hasattr(item, "metadata") and item.metadata:
-        images = getattr(item.metadata, "images", None)
-        if images and len(images) > 0:
-            img = images[0]
-            return img.url if hasattr(img, "url") else str(img)
-    return None
-
-
-def _serialize_queue_item(item: Any) -> dict | None:
-    """Serialize a queue item to dict."""
-    if not item:
-        return None
-    return {
-        "queue_item_id": item.queue_item_id,
-        "name": item.name,
-        "duration": item.duration,
-        "media_item": {
-            "uri": item.media_item.uri if item.media_item else None,
-            "name": item.media_item.name if item.media_item else None,
-            "media_type": item.media_item.media_type.value if item.media_item else None,
-            "image": _get_image_url(item.media_item) if item.media_item else None,
-        } if item.media_item else None,
-    }
-
-
 def _safe_serialize(obj: Any) -> Any:
-    """Safely serialize an object to JSON-compatible dict."""
+    """Safely serialize an object to JSON-compatible format."""
     if isinstance(obj, (str, int, float, bool, type(None))):
         return obj
     if isinstance(obj, dict):
         return {k: _safe_serialize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_safe_serialize(item) for item in obj]
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
     if hasattr(obj, "__dict__"):
         result = {}
         for key, value in obj.__dict__.items():
