@@ -1,4 +1,4 @@
-# bell_media/__init__.py v0.3.0
+# bell_media/__init__.py v0.3.1
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     _register_services(hass)
-    _register_frontend(hass)
+    await _register_frontend(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -90,14 +90,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-def _register_frontend(hass: HomeAssistant) -> None:
+async def _register_frontend(hass: HomeAssistant) -> None:
     """Register the frontend JS card."""
+    from homeassistant.components.http import StaticPathConfig
+
     js_path = os.path.join(
         os.path.dirname(__file__), "www", "bell-media-cards.js"
     )
     if os.path.exists(js_path):
         url = f"/{DOMAIN}/bell-media-cards.js"
-        hass.http.register_static_path(url, js_path, cache_headers=False)
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(url, js_path, False)]
+        )
         add_extra_js_url(hass, url)
         _LOGGER.debug("Registered frontend: %s", url)
     else:
