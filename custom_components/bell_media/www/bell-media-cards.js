@@ -1,5 +1,23 @@
-// bell-media-cards.js v0.3.0
+// bell-media-cards.js v0.4.0
 // MakerBell Media Cards for Music Assistant
+
+// ============================================
+// Active player - per browser tab
+// ============================================
+
+const BELL_STORAGE_KEY = 'bell_media_active_player';
+
+function bellGetActivePlayer() {
+  return sessionStorage.getItem(BELL_STORAGE_KEY) || null;
+}
+
+function bellSetActivePlayer(playerName) {
+  sessionStorage.setItem(BELL_STORAGE_KEY, playerName);
+  window.dispatchEvent(new CustomEvent('bell-active-player-changed', {
+    detail: { player: playerName },
+  }));
+}
+
 
 // ============================================
 // Shared service helper
@@ -14,8 +32,8 @@ class BellMediaAPI {
     this._hass = hass;
   }
 
-  async callService(domain, service, data, target) {
-    return this._hass.callService(domain, service, data, target);
+  async callService(domain, service, data) {
+    return this._hass.callService(domain, service, data);
   }
 
   async callBellService(service, data) {
@@ -55,22 +73,6 @@ class BellMediaAPI {
       args: args || {},
     });
     return result?.response?.result || null;
-  }
-
-  getActivePlayerEntity() {
-    return this._hass.states['select.bell_media_active_player'];
-  }
-
-  getActivePlayerName() {
-    const entity = this.getActivePlayerEntity();
-    return entity ? entity.state : null;
-  }
-
-  async setActivePlayer(name) {
-    await this.callService('select', 'select_option', {
-      entity_id: 'select.bell_media_active_player',
-      option: name,
-    });
   }
 }
 
@@ -204,6 +206,23 @@ class BellSpeakerCard extends HTMLElement {
     this._api = null;
     this._rendered = false;
     this._players = [];
+    this._boundOnActiveChange = this._onExternalActiveChange.bind(this);
+  }
+
+  connectedCallback() {
+    window.addEventListener('bell-active-player-changed', this._boundOnActiveChange);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('bell-active-player-changed', this._boundOnActiveChange);
+  }
+
+  _onExternalActiveChange(e) {
+    const dropdown = this.shadowRoot.querySelector('.bell-dropdown');
+    if (dropdown && dropdown.value !== e.detail.player) {
+      dropdown.value = e.detail.player;
+    }
+    this._renderPlayers();
   }
 
   set hass(hass) {
@@ -220,7 +239,7 @@ class BellSpeakerCard extends HTMLElement {
       this._loadPlayers();
     }
 
-    this._updateState();
+    this._updatePlayerRows();
   }
 
   setConfig(config) {
@@ -258,18 +277,6 @@ class BellSpeakerCard extends HTMLElement {
     });
   }
 
-  _updateState() {
-    const activeEntity = this._hass.states['select.bell_media_active_player'];
-    const dropdown = this.shadowRoot.querySelector('.bell-dropdown');
-    if (dropdown && activeEntity) {
-      if (dropdown.value !== activeEntity.state) {
-        dropdown.value = activeEntity.state;
-      }
-    }
-
-    this._updatePlayerRows();
-  }
-
   _updatePlayerRows() {
     const players = this._getFilteredPlayers();
     players.forEach(player => {
@@ -284,8 +291,8 @@ class BellSpeakerCard extends HTMLElement {
       const muted = state.attributes.is_volume_muted || false;
 
       const slider = this.shadowRoot.querySelector(`input[data-player="${id}"]`);
-      const pct = this.shadowRoot.querySelector(`.pct-${id}`);
-      const muteBtn = this.shadowRoot.querySelector(`.mute-${id}`);
+      const pct = this.shadowRoot.querySelector(`.pct-${CSS.escape(id)}`);
+      const muteBtn = this.shadowRoot.querySelector(`.mute-${CSS.escape(id)}`);
 
       if (slider && parseInt(slider.value) !== vol) {
         slider.value = vol;
@@ -304,17 +311,12 @@ class BellSpeakerCard extends HTMLElement {
       const state = this._hass.states[entityId];
       if (state.attributes.mass_player_id === playerId) return entityId;
     }
-
-    const slug = playerId.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-    const guess = `media_player.${slug}`;
-    if (this._hass.states[guess]) return guess;
-
     return null;
   }
 
   async _onActivePlayerChange(e) {
-    const name = e.target.value;
-    await this._api.setActivePlayer(name);
+    bellSetActivePlayer(e.target.value);
+    this._renderPlayers();
   }
 
   async _onMuteToggle(playerId) {
@@ -338,11 +340,11 @@ class BellSpeakerCard extends HTMLElement {
   }
 
   async _onJoinToggle(playerId) {
-    const activeEntity = this._hass.states['select.bell_media_active_player'];
-    if (!activeEntity) return;
+    const activeName = bellGetActivePlayer();
+    if (!activeName) return;
 
     const activePlayer = this._players.find(p =>
-      (p.display_name || p.name) === activeEntity.state
+      (p.display_name || p.name) === activeName
     );
     if (!activePlayer) return;
 
@@ -371,41 +373,45 @@ class BellSpeakerCard extends HTMLElement {
 
   _renderPlayers() {
     const container = this.shadowRoot.querySelector('.players-list');
-    if (!container) return;
-
-    const activeEntity = this._hass.states['select.bell_media_active_player'];
-    const options = activeEntity?.attributes?.options || [];
-
     const dropdown = this.shadowRoot.querySelector('.bell-dropdown');
-    if (dropdown) {
-      dropdown.innerHTML = options.map(o =>
-        `<option value="${o}" ${o === activeEntity?.state ? 'selected' : ''}>${o}</option>`
-      ).join('');
-    }
+    if (!container || !dropdown) return;
 
     const players = this._getFilteredPlayers();
+    const activeName = bellGetActivePlayer();
+
+    dropdown.innerHTML = players.map(p => {
+      const name = p.display_name || p.name || p.player_id;
+      return `<option value="${name}" ${name === activeName ? 'selected' : ''}>${name}</option>`;
+    }).join('');
+
+    if (!activeName && players.length > 0) {
+      const firstName = players[0].display_name || players[0].name;
+      bellSetActivePlayer(firstName);
+    }
+
     const activePlayer = this._players.find(p =>
-      (p.display_name || p.name) === activeEntity?.state
+      (p.display_name || p.name) === (activeName || '')
     );
     const activeId = activePlayer?.player_id;
 
     container.innerHTML = players.map(player => {
       const id = player.player_id;
       const name = player.display_name || player.name || id;
+      const safeId = CSS.escape(id);
       const isSynced = player.synced_to === activeId ||
         (activePlayer?.group_childs && activePlayer.group_childs.includes(id));
       const isActive = id === activeId;
 
       return `
         <div class="bell-row">
-          <button class="bell-icon-btn mute-${id}" data-action="mute" data-player="${id}">
+          <button class="bell-icon-btn mute-${safeId}" data-action="mute" data-player="${id}">
             ${ICONS.unmute}
           </button>
           <span class="bell-name">${name}</span>
           <div class="bell-slider-wrap">
             <input type="range" class="bell-slider" min="0" max="100" value="0"
               data-player="${id}" data-action="volume" />
-            <span class="bell-vol-pct pct-${id}">0%</span>
+            <span class="bell-vol-pct pct-${safeId}">0%</span>
           </div>
           ${isActive ? '' : `
             <button class="bell-icon-btn ${isSynced ? 'active' : ''}"
@@ -469,4 +475,4 @@ window.customCards.push(
   },
 );
 
-console.info('%c BELL-MEDIA-CARDS %c v0.3.0 ', 'background:#e8952f;color:#fff;font-weight:bold;', 'background:#333;color:#fff;');
+console.info('%c BELL-MEDIA-CARDS %c v0.4.0 ', 'background:#e8952f;color:#fff;font-weight:bold;', 'background:#333;color:#fff;');

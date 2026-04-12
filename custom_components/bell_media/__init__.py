@@ -1,4 +1,4 @@
-# bell_media/__init__.py v0.3.2
+# bell_media/__init__.py v0.4.0
 
 from __future__ import annotations
 
@@ -10,14 +10,11 @@ import voluptuous as vol
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 
 from .const import DOMAIN, MASS_DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
-PLATFORMS = [Platform.SELECT]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -77,17 +74,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _register_services(hass)
     await _register_frontend(hass)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-    return unload_ok
+    hass.data[DOMAIN].pop(entry.entry_id, None)
+    return True
 
 
 async def _register_frontend(hass: HomeAssistant) -> None:
