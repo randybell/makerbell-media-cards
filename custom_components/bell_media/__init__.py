@@ -1,18 +1,23 @@
-"""Bell Media Cards integration for Home Assistant."""
+# bell_media/__init__.py v0.3.0
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 
 from .const import DOMAIN, MASS_DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS = [Platform.SELECT]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -35,7 +40,6 @@ def _get_mass_client(hass: HomeAssistant, entry: ConfigEntry):
         if runtime_data is None:
             continue
 
-        # The client may be stored directly or as an attribute
         if hasattr(runtime_data, "mass"):
             return runtime_data.mass
         if hasattr(runtime_data, "client"):
@@ -43,7 +47,6 @@ def _get_mass_client(hass: HomeAssistant, entry: ConfigEntry):
         if hasattr(runtime_data, "send_command"):
             return runtime_data
 
-        # Log what we found so we can debug
         _LOGGER.debug(
             "MA runtime_data type: %s, attrs: %s",
             type(runtime_data).__name__,
@@ -62,7 +65,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Music Assistant client not available")
         return False
 
-    hass.data[DOMAIN][entry.entry_id] = mass
+    hass.data[DOMAIN][entry.entry_id] = {
+        "client": mass,
+    }
 
     _LOGGER.info(
         "Bell Media Cards connected to Music Assistant (client type: %s)",
@@ -70,20 +75,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     _register_services(hass)
+    _register_frontend(hass)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    hass.data[DOMAIN].pop(entry.entry_id, None)
-    return True
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+    return unload_ok
+
+
+def _register_frontend(hass: HomeAssistant) -> None:
+    """Register the frontend JS card."""
+    js_path = os.path.join(
+        os.path.dirname(__file__), "www", "bell-media-cards.js"
+    )
+    if os.path.exists(js_path):
+        url = f"/{DOMAIN}/bell-media-cards.js"
+        hass.http.register_static_path(url, js_path, cache_headers=False)
+        add_extra_js_url(hass, url)
+        _LOGGER.debug("Registered frontend: %s", url)
+    else:
+        _LOGGER.warning("Frontend JS not found at %s", js_path)
 
 
 def _get_client(hass: HomeAssistant) -> Any:
     """Get the first available MA client."""
-    for client in hass.data[DOMAIN].values():
-        return client
+    for data in hass.data[DOMAIN].values():
+        if isinstance(data, dict) and "client" in data:
+            return data["client"]
     raise ValueError("No Music Assistant connection available")
 
 
