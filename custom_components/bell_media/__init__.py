@@ -1,4 +1,4 @@
-# bell_media/__init__.py v0.4.0
+# bell_media/__init__.py v0.5.0
 
 from __future__ import annotations
 
@@ -15,6 +15,14 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from .const import DOMAIN, MASS_DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+JS_FILES = [
+    "bell-media-shared.js",
+    "bell-speaker-card.js",
+    "bell-keypress-card.js",
+    "bell-search-card.js",
+    "bell-queue-card.js",
+]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -44,11 +52,6 @@ def _get_mass_client(hass: HomeAssistant, entry: ConfigEntry):
         if hasattr(runtime_data, "send_command"):
             return runtime_data
 
-        _LOGGER.debug(
-            "MA runtime_data type: %s, attrs: %s",
-            type(runtime_data).__name__,
-            [a for a in dir(runtime_data) if not a.startswith("_")],
-        )
         return runtime_data
 
     return None
@@ -67,7 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     _LOGGER.info(
-        "Bell Media Cards connected to Music Assistant (client type: %s)",
+        "Bell Media Cards v0.5.0 connected (client type: %s)",
         type(mass).__name__,
     )
 
@@ -84,23 +87,27 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _register_frontend(hass: HomeAssistant) -> None:
-    """Register the frontend JS card."""
+    """Register all frontend JS files."""
     from homeassistant.components.http import StaticPathConfig
 
-    url = f"/{DOMAIN}/bell-media-cards.js"
-    js_path = os.path.join(
-        os.path.dirname(__file__), "www", "bell-media-cards.js"
-    )
-    if os.path.exists(js_path):
+    www_dir = os.path.join(os.path.dirname(__file__), "www")
+
+    for filename in JS_FILES:
+        js_path = os.path.join(www_dir, filename)
+        if not os.path.exists(js_path):
+            _LOGGER.warning("Frontend JS not found: %s", js_path)
+            continue
+
+        url = f"/{DOMAIN}/{filename}"
         try:
             await hass.http.async_register_static_paths(
                 [StaticPathConfig(url, js_path, False)]
             )
         except RuntimeError:
             _LOGGER.debug("Frontend path already registered: %s", url)
+
         add_extra_js_url(hass, url)
-    else:
-        _LOGGER.warning("Frontend JS not found at %s", js_path)
+        _LOGGER.debug("Registered frontend: %s", url)
 
 
 def _get_client(hass: HomeAssistant) -> Any:
